@@ -27,7 +27,7 @@ binaryTFAFilename = "binaryTFASmall.csv"
 matrixEFilename = "matrixESmall.csv"
 
 #how long to run
-iterations = 100
+iterations = 3
 
 #an added tag to output file names to identify and group them
 fileLabel = "HKwoLASSO"
@@ -38,8 +38,10 @@ currently:
 	the first boolean is whether or not to learn with CS constraints
 	the second boolean is whether or not to learn with LASSO constraint
 	the third boolean is whether or not the data is microarray (as opposed to RNAseq)
+	the fourth boolean is whether or not we are validating over a known CS matrix
+	the fifth is the number of iterations after which we can learn 0 coeff values
 """
-modelParams = [True, False, True]
+modelParams = [True, False, True, False, iterations]
 
 def learnSingleRandomStart():
 		#which number random start this run is

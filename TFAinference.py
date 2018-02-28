@@ -31,8 +31,9 @@ def learnTFA(A, C, data, modelParams):
   numSamples = len(data[0])
   numTFs = len(C[0])-1
 
-  # currently none of these params relevant to learning TFA
-  # csFlag, lassoFlag, maFlag = modelParams
+  #if validating, don't use scaling constraint
+  #if zeroFlag, don't use zero constraint
+  validating, zeroFlag = modelParams
 
   print "learning activity values"
 
@@ -50,13 +51,17 @@ def learnTFA(A, C, data, modelParams):
       if A[i][j]==0:
         varsMatrix[i].append(0)
       else:
-        # currently does not allow learning of 0 for activity values
-        v = model.addVar(lb=0.0001, vtype=GRB.CONTINUOUS, name='A['+str(i)+','+str(j)+']')
+	if zeroFlag:
+          v = model.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='A['+str(i)+','+str(j)+']')
+	else:
+          # crude lower bound to avoid learning of 0 for activity values
+          v = model.addVar(lb=0.0001, vtype=GRB.CONTINUOUS, name='A['+str(i)+','+str(j)+']')
         varsMatrix[i].append(v)
         constraint += v
         constraintCounter += 1
-    # add the scaling constraint
-    model.addConstr(constraint/constraintCounter, GRB.EQUAL, 1.0, "c"+str(i))
+    # add the scaling constraint if not validating
+    if not validating:
+      model.addConstr(constraint/constraintCounter, GRB.EQUAL, 1.0, "c"+str(i))
     model.update()
 
   # Populate objective
@@ -104,7 +109,7 @@ def learnTFA(A, C, data, modelParams):
 """
 Input:
   latest activity matrix A
-  binary cs matrix C
+  binary cs matrix C, or latest cs matrix if validating
   expression matrix data
   list of model parameters
 Output:
@@ -118,7 +123,14 @@ def learnCS(A, C, data, modelParams):
   numSamples = len(data[0])
   numTFs = len(C[0])
 
-  csFlag, lassoWall, maFlag = modelParams
+  #csFlag is bool, whether or not cs signs are constrained to binary, ignored if validating
+  #lassoWall is numeric value of upper bound for lasso constraint, ignored if validating
+  #maFlag is bool, whether or not microarray data with no sign constraint on baseline value
+  #validating is book, whether or not to learn TF-target gene influences at all
+  #zeroFlag is bool, whether or not to allow zero coeff
+  csFlag, lassoWall, maFlag, validating, zeroFlag = modelParams
+  if validating: #C matrix has pseudoTF column, need to remove from count
+    numTFs--
 
   print "learning CS with", numGenes, "genes,", numSamples, "samples,", numTFs, "TFs"
 
@@ -135,31 +147,43 @@ def learnCS(A, C, data, modelParams):
       if j==numTFs: #learning baseline expression
         if maFlag:
           v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
+	  if not zeroFlag:
+	    # constrain away from 0
+	    v2 = model.addVar()
+	    model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
+	    model.addConstr(v2 > 0.0001)
         else:
           v = model.addVar(lb=0.0001, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
         varsMatrix[i].append(v)
       else: #learning an influence between a TF and gene
-        if C[i][j]==0:  #no influence
-          varsMatrix[i].append(0)
-        elif C[i][j] > 0: #an influence to be learned, activating
-          if csFlag:
-            v = model.addVar(lb=0.0001, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-          else:
+	if validating:
+	  varsMatrix[i].append(C[i][j])
+	else:
+          if C[i][j]==0:  #no influence
+            varsMatrix[i].append(0)
+          elif C[i][j] > 0: #an influence to be learned, activating
+            if csFlag:
+              v = model.addVar(lb=0.0001, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
+            else:
+                v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
+            varsMatrix[i].append(v)
+            v2 = model.addVar()
+            model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
+	    if not csFlag and not zeroFlag:
+	      model.addConstr(v2 > 0.0001)
+            lassoConstraint += v2
+          else: #an influence to be learned, repressing
+            if csFlag:
+              v = model.addVar(lb=-GRB.INFINITY, ub=-0.0001, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
+            else:
               v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-          varsMatrix[i].append(v)
-          v2 = model.addVar()
-          model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
-          lassoConstraint += v2
-        else: #an influence to be learned, repressing
-          if csFlag:
-            v = model.addVar(lb=-GRB.INFINITY, ub=-0.0001, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-          else:
-            v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-          varsMatrix[i].append(v)
-          v2 = model.addVar()
-          model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
-          lassoConstraint += v2
-  if lassoWall:
+            varsMatrix[i].append(v)
+            v2 = model.addVar()
+            model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
+	    if not csFlag and not zeroFlag:
+	      model.addConstr(v2 > 0.0001)
+            lassoConstraint += v2
+  if lassoWall and not validating:
     model.addConstr(lassoConstraint <= lassoWall, "lasso")
   model.update()
 
@@ -192,14 +216,24 @@ def learnCS(A, C, data, modelParams):
     return False
 
   #convert back to matrix
-  Ctemp = []
-  for i in range(numGenes):
-    Ctemp.append([])
-    for j in range(numTFs+1):
-      if j<numTFs and C[i][j] == 0:
-        Ctemp[i].append(0)
-      else:
-        Ctemp[i].append(model.getAttr('x', [varsMatrix[i][j]])[0])
+  if validating:
+    Ctemp = []
+    for i in range(numGenes):
+      Ctemp.append([])
+      for j in range(numTFs+1):
+        if j<numTFs:
+          Ctemp[i].append(C[i][j])
+        else:
+          Ctemp[i].append(model.getAttr('x', [varsMatrix[i][j]])[0])
+  else:
+    Ctemp = []
+    for i in range(numGenes):
+      Ctemp.append([])
+      for j in range(numTFs+1):
+        if j<numTFs and C[i][j] == 0:
+          Ctemp[i].append(0)
+        else:
+          Ctemp[i].append(model.getAttr('x', [varsMatrix[i][j]])[0])
     
   return Ctemp
 
@@ -215,6 +249,7 @@ Output:
   learned CS matrix if learning succeeded
 
 makes a least squares optimization problem for gurobi to optimize
+TODO: make this obsolete
 """
 def learnCSValidation(A, C, data, modelParams):
   numGenes = len(data)
@@ -290,7 +325,7 @@ Input:
   list of input file names
   string for output file labeling
   integer value numIterations for how many iterations of optimization
-  list of boolean flags for CS constraints, LASSO contraints, and microarray/RNAseq data
+  list of boolean and numerical flags
 Output:
   the variance explained of the final model learned
 
@@ -298,7 +333,8 @@ Executes whole process of TFA inference learning
 """
 def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
   startFile, csFile, tfaFile, dataFile = inputFiles
-  csFlag, lassoFlag, maFlag = modelParams
+  #zeroRelease is when to allow learning of 0 coeff values
+  csFlag, lassoFlag, maFlag, validating, zeroRelease = modelParams
   
   # Put model data into matrices and lists
   # this function is in TFAinferenceIO.py
@@ -319,28 +355,30 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
   
   start = time.time()
 
-  for iter in range(numIterations):
+  for itr in range(numIterations):
   
-    print "\niteration ", iter, "\n"
+    print "\niteration ", itr, "\n"
   
-    Atemp = learnTFA(A, Ctemp, data, [])
+    Atemp = learnTFA(A, Ctemp, data, [validating, itr > zeroRelease])
     if Atemp == False:
       print "Could not learn the activity matrix"
       return
 
-    Ctemp = learnCS(Atemp, C, data, [csFlag, 0, maFlag])
-      
+    if validating:
+      Ctemp = learnCS(Atemp, Ctemp, data, [csFlag, 0, maFlag, validating, itr > zeroRelease])
+    else:  
+      Ctemp = learnCS(Atemp, C, data, [csFlag, 0, maFlag, validating, itr > zeroRelease])
+    
     if Ctemp == False:
       print "Could not learn the control strength"
       return
 
-    if lassoFlag:
+    if lassoFlag and not validating:
       lassoLog = open("logFiles/lassoLog"+fileLabel+".tsv", 'a')
       # calculate lasso constraint upper bound as sum of abs coeff, except baseline values
       coeffSum = 0
       for i in range(len(Ctemp)):
-        coeffSum += sum([abs(x) for x in Ctemp[i]])
-        coeffSum -= abs(Ctemp[i][-1])
+	coeffSum += sum([abs(x) for x in Ctemp[i][:-1]])
       lassoLog.write(str(round(coeffSum, 3))+"\t")
       trainA, testA, trainData, testData = cvSamplingMatrices(Atemp, data, trainColsList, testColsList)
 
@@ -353,7 +391,7 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
         realDataCompilation = []
         for cross in range(10):
           print "param", param, "cross", cross
-          Ctest = learnCS(trainA[cross], C, trainData[cross], [csFlag, param*0.1*coeffSum, maFlag])
+          Ctest = learnCS(trainA[cross], C, trainData[cross], [csFlag, param*0.1*coeffSum, maFlag, validating, itr > zeroRelease])
           if Ctest != False:
             validationData = matrixMultiply(Ctest, testA[cross])
             var, l2 = calcError(testData[cross], validationData, False)
@@ -372,16 +410,10 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
         # log the results of testing this param
         lassoLog.write(str(param)+"\t")   # param
         # list of validation errors
-        lassoLog.write("{")   
-        for x in errorList:
-          lassoLog.write(str(round(x,3))+", ")
-        lassoLog.write("}\t")
+	lassoLog.write("{"+",".join([str(round(x)) for x in errorList])+"}\t")
         lassoLog.write(str(round(sum(errorList)/len(errorList), 3))+"\t") # avg validation error
         #list of training errors
-        lassoLog.write("{")   
-        for x in trainErrorList:
-          lassoLog.write(str(round(x,3))+", ")
-        lassoLog.write("}\t")
+	lassoLog.write("{"+",".join([str(round(x)) for x in trainErrorList])+"}\t")
         lassoLog.write(str(round(sum(trainErrorList)/len(trainErrorList), 3))+"\t") # avg training error
         testVar, testL2 = calcError(map(list, zip(*realDataCompilation)), map(list, zip(*testDataCompilation)), False)
         lassoLog.write(str(round(testVar,3))+"\t")  # var explained over all test results
@@ -389,7 +421,7 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
       lassoLog.write(str(bestParam)+"\t") #best param
       lassoLog.write(str(round(bestError, 3))+"\t") #best avg validation error
       # learn CS with lasso constraint
-      Ctemp = learnCS(Atemp, C, data, [csFlag, bestParam*0.1*coeffSum, maFlag])
+      Ctemp = learnCS(Atemp, C, data, [csFlag, bestParam*0.1*coeffSum, maFlag, validating, itr > zeroRelease])
       if Ctemp == False:
         print "Could not learn the control strength"
         return
@@ -511,6 +543,7 @@ Output:
   the variance explained of the final model learned
 
 Executes learning of activity matrix and baseline values in cs matrix
+TODO: make this obsolete
 """
 def tfaInferenceValidation(inputFiles, fileLabel, numIterations, modelParams):
   startFile, csFile, tfaFile, dataFile = inputFiles
