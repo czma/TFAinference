@@ -130,7 +130,7 @@ def learnCS(A, C, data, modelParams):
   #zeroFlag is bool, whether or not to allow zero coeff
   csFlag, lassoWall, maFlag, validating, zeroFlag = modelParams
   if validating: #C matrix has pseudoTF column, need to remove from count
-    numTFs--
+    numTFs-=1
 
   print "learning CS with", numGenes, "genes,", numSamples, "samples,", numTFs, "TFs"
 
@@ -434,7 +434,7 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
 
     currentVarExplained, currentError = calcError(data, matrixMultiply(Ctemp, Atemp), True)
     # log the results every 10 iterations
-    if iter%10 == 0:
+    if itr%10 == 0:
       saveResults(Ctemp, Atemp, currentVarExplained, "logFiles/csLog"+fileLabel+".csv", "logFiles/tfaLog"+fileLabel+".csv", "logFiles/varExplainedLog"+fileLabel+".csv")
   
   end = time.time()
