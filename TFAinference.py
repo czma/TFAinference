@@ -20,13 +20,14 @@ Input:
   latest control strength matrix C
   expression matrix data
   list of model parameters
+  fileLabel for use w/logging gurobi output
 Output:
   False if learning failed
   learned A matrix if learning succeeded
 
 makes a least squares optimization problem for gurobi to optimize
 """
-def learnTFA(A, C, data, modelParams):
+def learnTFA(A, C, data, modelParams, fileLabel):
   numGenes = len(data)
   numSamples = len(data[0])
   numTFs = len(C[0])-1
@@ -39,7 +40,8 @@ def learnTFA(A, C, data, modelParams):
 
   # initialize gurobi model
   model = Model()
-  model.setParam('OutputFlag', False)
+  model.setParam('LogToConsole', False)
+  model.setParam('LogFile', 'logFiles/'+fileLabel+".log")
 
   # Add tfa variables to the model
   varsMatrix = []   # holds the activity matrix, with pointers to coeff where relevant
@@ -118,7 +120,7 @@ Output:
 
 makes a least squares optimization problem for gurobi to optimize
 """
-def learnCS(A, C, data, modelParams):
+def learnCS(A, C, data, modelParams, fileLabel):
   numGenes = len(data)
   numSamples = len(data[0])
   numTFs = len(C[0])
@@ -133,10 +135,12 @@ def learnCS(A, C, data, modelParams):
     numTFs-=1
 
   print "learning CS with", numGenes, "genes,", numSamples, "samples,", numTFs, "TFs"
+  print "lasso constraint:", lassoWall
 
   # Initialize the model
   model = Model()
-  model.setParam('OutputFlag', False)
+  model.setParam('LogToConsole', False)
+  model.setParam('LogFile', "logFiles/"+fileLabel+".log")
   
   # Add cs variables to the model
   varsMatrix = []   # holds the cs matrix, with pointers to coeff where relevant
@@ -238,87 +242,6 @@ def learnCS(A, C, data, modelParams):
   return Ctemp
 
 
-"""
-Input:
-  latest activity matrix A
-  validation cs matrix C
-  expression matrix data
-  list of model parameters
-Output:
-  False if learning failed
-  learned CS matrix if learning succeeded
-
-makes a least squares optimization problem for gurobi to optimize
-TODO: make this obsolete
-"""
-def learnCSValidation(A, C, data, modelParams):
-  numGenes = len(data)
-  numSamples = len(data[0])
-  numTFs = len(C[0])-1
-
-  csFlag, lassoWall, maFlag = modelParams
-
-  print "learning CS with", numGenes, "genes,", numSamples, "samples,", numTFs, "TFs"
-
-  # Initialize the model
-  model = Model()
-  model.setParam('OutputFlag', False)
-  
-  # Add cs variables to the model
-  varsMatrix = []
-  for i in range(numGenes):
-    varsMatrix.append([])
-    for j in range(numTFs+1):
-      if j==numTFs: #learning baseline expression
-        if maFlag:
-          v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-        else:
-          v = model.addVar(lb=0.0001, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-        varsMatrix[i].append(v)
-      else: #learning an influence between a TF and gene
-          varsMatrix[i].append(C[i][j])
-  model.update()
-
-  # Populate objective
-  obj = QuadExpr()
-  for i in range(numGenes):
-    for j in range(numSamples):
-      geneExpr = LinExpr()
-      geneExpr += varsMatrix[i][numTFs]
-      for k in range(numTFs):
-        if type(varsMatrix[i][k])==Var:
-          geneExpr += varsMatrix[i][k]*A[k][j]
-      geneError = data[i][j] - geneExpr
-      obj += geneError * geneError
-
-  model.setObjective(obj)
-  model.update()
-
-  # Solve
-  try:
-    model.optimize()
-  except:
-    return False
-
-  # Write model to a file
-  # model.write('learnCS.lp')
-
-  # check that optimization succeeded
-  if model.status != GRB.Status.OPTIMAL:
-    return False
-
-  #convert back to matrix
-  Ctemp = []
-  for i in range(numGenes):
-    Ctemp.append([])
-    for j in range(numTFs+1):
-      if j<numTFs:
-        Ctemp[i].append(C[i][j])
-      else:
-        Ctemp[i].append(model.getAttr('x', [varsMatrix[i][j]])[0])
-    
-  return Ctemp
-
 
 """
 Input:
@@ -335,6 +258,8 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
   startFile, csFile, tfaFile, dataFile = inputFiles
   #zeroRelease is when to allow learning of 0 coeff values
   csFlag, lassoFlag, maFlag, validating, zeroRelease = modelParams
+
+  print "validating?", validating
   
   # Put model data into matrices and lists
   # this function is in TFAinferenceIO.py
@@ -359,15 +284,15 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
   
     print "\niteration ", itr, "\n"
   
-    Atemp = learnTFA(A, Ctemp, data, [validating, itr > zeroRelease])
+    Atemp = learnTFA(A, Ctemp, data, [validating, itr > zeroRelease], fileLabel)
     if Atemp == False:
       print "Could not learn the activity matrix"
       return
 
     if validating:
-      Ctemp = learnCS(Atemp, Ctemp, data, [csFlag, 0, maFlag, validating, itr > zeroRelease])
+      Ctemp = learnCS(Atemp, Ctemp, data, [csFlag, 0, maFlag, validating, itr > zeroRelease], fileLabel)
     else:  
-      Ctemp = learnCS(Atemp, C, data, [csFlag, 0, maFlag, validating, itr > zeroRelease])
+      Ctemp = learnCS(Atemp, C, data, [csFlag, 0, maFlag, validating, itr > zeroRelease], fileLabel)
     
     if Ctemp == False:
       print "Could not learn the control strength"
@@ -391,7 +316,7 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
         realDataCompilation = []
         for cross in range(10):
           print "param", param, "cross", cross
-          Ctest = learnCS(trainA[cross], C, trainData[cross], [csFlag, param*0.1*coeffSum, maFlag, validating, itr > zeroRelease])
+          Ctest = learnCS(trainA[cross], C, trainData[cross], [csFlag, param*0.1*coeffSum, maFlag, validating, itr > zeroRelease], fileLabel)
           if Ctest != False:
             validationData = matrixMultiply(Ctest, testA[cross])
             var, l2 = calcError(testData[cross], validationData, False)
@@ -421,7 +346,7 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
       lassoLog.write(str(bestParam)+"\t") #best param
       lassoLog.write(str(round(bestError, 3))+"\t") #best avg validation error
       # learn CS with lasso constraint
-      Ctemp = learnCS(Atemp, C, data, [csFlag, bestParam*0.1*coeffSum, maFlag, validating, itr > zeroRelease])
+      Ctemp = learnCS(Atemp, C, data, [csFlag, bestParam*0.1*coeffSum, maFlag, validating, itr > zeroRelease], fileLabel)
       if Ctemp == False:
         print "Could not learn the control strength"
         return
@@ -532,79 +457,6 @@ def grabColumns(matrix, cols):
     newMatrix.append(newMatrixRow)
   return newMatrix
 
-
-"""
-Input:
-  list of input file names
-  string for output file labeling
-  integer value numIterations for how many iterations of optimization
-  list of boolean flags for CS constraints, LASSO contraints, and microarray/RNAseq data
-Output:
-  the variance explained of the final model learned
-
-Executes learning of activity matrix and baseline values in cs matrix
-TODO: make this obsolete
-"""
-def tfaInferenceValidation(inputFiles, fileLabel, numIterations, modelParams):
-  startFile, csFile, tfaFile, dataFile = inputFiles
-  csFlag, lassoFlag, maFlag = modelParams
-  
-  # Put model data into matrices and lists
-  # this function is in TFAinferenceIO.py
-  A = readMatrixFromFile(tfaFile)
-  C = readMatrixFromFile(csFile)
-  Ctemp = readMatrixFromFile(startFile)
-  data = readMatrixFromFile(dataFile)
-
-  #numGenes = len(data)
-  #numSamples = len(data[0])
-  #numTFs = len(A)
-  
-  cProgression = []
-  aProgression = []
-  
-  start = time.time()
-
-  for iter in range(numIterations):
-  
-    print "\niteration ", iter, "\n"
-  
-    Atemp = learnTFA(A, Ctemp, data, [])
-    if Atemp == False:
-      print "Could not learn the activity matrix"
-      return
-
-    Ctemp = learnCSValidation(Atemp, C, data, [csFlag, 0, maFlag])
-      
-    if Ctemp == False:
-      print "Could not learn the control strength"
-      return
-
-    aProgression.append(Atemp)
-    cProgression.append(Ctemp) 
-
-    currentVarExplained, currentError = calcError(data, matrixMultiply(Ctemp, Atemp), True)
-    # log the results every 10 iterations
-    if iter%10 == 0:
-      saveResults(Ctemp, Atemp, currentVarExplained, "logFiles/csLog"+fileLabel+".csv", "logFiles/tfaLog"+fileLabel+".csv", "logFiles/varExplainedLog"+fileLabel+".csv")
-  
-  end = time.time()
-  
-  print "\n\n\n"
-  print "done learning, now review:"
-  
-  for iteration in range(numIterations):
-    C = cProgression[iteration]
-    A = aProgression[iteration]
-    print "iteration ", iteration
-    dataTemp = matrixMultiply(C,A)
-    var, l2 = calcError(data, dataTemp, True)
-  
-  print "total run time (secs): ", end-start
-  
-  saveResults(Ctemp, Atemp, var, "results/learnedCS"+fileLabel+".csv", "results/learnedTFA"+fileLabel+".csv", "results/learnedVarExplained"+fileLabel+".csv")
-
-  return var
 
 
 
