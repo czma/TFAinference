@@ -95,6 +95,26 @@ def calcError(data, dataLearned, printFlag):
     print "Sum of Squared Errors: ", numerator
   return [1-(numerator/denominator), numerator]
 
+"""
+Input:
+  a list of lists
+  a list of column indices
+Output:
+  a list of lists
+
+Returns a matrix of only the columns listed from the input matrix
+If a column index in the list is beyond the input matrix, it's ignored
+"""
+def grabColumns(matrix, cols):
+  newMatrix = []
+  for row in matrix:
+    newMatrixRow = []
+    for j in range(len(row)):
+      if j in cols:
+  newMatrixRow.append(row[j])
+    newMatrix.append(newMatrixRow)
+  return newMatrix
+
 
 
 
