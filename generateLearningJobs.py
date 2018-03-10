@@ -17,10 +17,10 @@ binaryTFAFilename = "binaryTFASmall.csv"
 matrixEFilename = "matrixESmall.csv"
 
 #how long to run
-iterations = 5
+iterations = 100
 
 #numStarts, parallel, mem
-sbatchParams = [10, 5, 16]
+sbatchParams = [100, 30, 16]
 
 #an added tag to output file names to identify and group them
 fileLabels = ["learnNNNN", "learnLNNN", "learnNSNN", "learnNNNZ5", "learnLSNN", "learnLNNZ5", "learnNSNZ5", "learnLSNZ5"]

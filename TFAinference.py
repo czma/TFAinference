@@ -88,7 +88,7 @@ def learnTFA(A, C, data, modelParams, fileLabel):
   	return False
 
   # Write model to a file
-  # model.write('learnTFA.lp')
+  # model.write('modelFiles/learnTFA'+fileLabel+'.lp')
 
   # check that optimization succeeded
   if model.status != GRB.Status.OPTIMAL:
@@ -151,11 +151,6 @@ def learnCS(A, C, data, modelParams, fileLabel):
       if j==numTFs: #learning baseline expression
         if maFlag:
           v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
-	  if not zeroFlag:
-	    # constrain away from 0
-	    v2 = model.addVar()
-	    model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
-	    model.addConstr(v2 > 0.0001)
         else:
           v = model.addVar(lb=0.0001, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
         varsMatrix[i].append(v)
@@ -171,10 +166,10 @@ def learnCS(A, C, data, modelParams, fileLabel):
             else:
                 v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
             varsMatrix[i].append(v)
-            v2 = model.addVar()
+            v2 = model.addVar(name='|C['+str(i)+','+str(j)+']|')
             model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
 	    if not csFlag and not zeroFlag:
-	      model.addConstr(v2 > 0.0001)
+	      model.addConstr(v2 >= 0.0001, name='zeroconstr'+str(i)+'-'+str(j))
             lassoConstraint += v2
           else: #an influence to be learned, repressing
             if csFlag:
@@ -182,10 +177,10 @@ def learnCS(A, C, data, modelParams, fileLabel):
             else:
               v = model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, vtype=GRB.CONTINUOUS, name='C['+str(i)+','+str(j)+']')
             varsMatrix[i].append(v)
-            v2 = model.addVar()
+            v2 = model.addVar(name='|C['+str(i)+','+str(j)+']|')
             model.addGenConstrAbs(v2, v, "absconstr"+str(i)+"-"+str(j))
 	    if not csFlag and not zeroFlag:
-	      model.addConstr(v2 > 0.0001)
+	      model.addConstr(v2 >= 0.0001, name='zerocontr'+str(i)+str(j))
             lassoConstraint += v2
   if lassoWall and not validating:
     model.addConstr(lassoConstraint <= lassoWall, "lasso")
@@ -213,7 +208,7 @@ def learnCS(A, C, data, modelParams, fileLabel):
     return False
 
   # Write model to a file
-  # model.write('learnCS.lp')
+  model.write('modelFiles/learnCS'+fileLabel+'.lp')
 
   # check that optimization succeeded
   if model.status != GRB.Status.OPTIMAL:
@@ -277,6 +272,7 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
   if lassoFlag:
     # sample splits for 10 fold cross validation
     trainColsList, testColsList = cvSampleSplits(numSamples, 10)
+    numCoeffCS = sum([sum([abs(x) for x in y]) for y in C])
   
   start = time.time()
 
@@ -305,43 +301,45 @@ def tfaInference(inputFiles, fileLabel, numIterations, modelParams):
       for i in range(len(Ctemp)):
 	coeffSum += sum([abs(x) for x in Ctemp[i][:-1]])
       lassoLog.write(str(round(coeffSum, 3))+"\t")
+      print "coeffSum:", coeffSum
       trainA, testA, trainData, testData = cvSamplingMatrices(Atemp, data, trainColsList, testColsList)
 
       bestParam = 10
       bestError = float('inf')
       for param in range(1,11):
-        errorList = []
-        trainErrorList = []
-        testDataCompilation = []
-        realDataCompilation = []
-        for cross in range(10):
-          print "param", param, "cross", cross
-          Ctest = learnCS(trainA[cross], C, trainData[cross], [csFlag, param*0.1*coeffSum, maFlag, validating, itr > zeroRelease], fileLabel)
-          if Ctest != False:
-            validationData = matrixMultiply(Ctest, testA[cross])
-            var, l2 = calcError(testData[cross], validationData, False)
-            errorList.append(l2)
-            var, l2 = calcError(trainData[cross], matrixMultiply(Ctest, trainA[cross]), False)
-            trainErrorList.append(l2)
-            for row in map(list, zip(*validationData)):
-              testDataCompilation.append(row)
-            for row in map(list, zip(*testData[cross])):
-              realDataCompilation.append(row)
-          else:
-            lassoLog.write("could not learn with param "+str(param)+" on fold "+str(cross)+"\t")
-        if sum(errorList)/len(errorList) < bestError:
-          bestParam = param
-          bestError = sum(errorList)/len(errorList)
-        # log the results of testing this param
-        lassoLog.write(str(param)+"\t")   # param
-        # list of validation errors
-	lassoLog.write("{"+",".join([str(round(x)) for x in errorList])+"}\t")
-        lassoLog.write(str(round(sum(errorList)/len(errorList), 3))+"\t") # avg validation error
-        #list of training errors
-	lassoLog.write("{"+",".join([str(round(x)) for x in trainErrorList])+"}\t")
-        lassoLog.write(str(round(sum(trainErrorList)/len(trainErrorList), 3))+"\t") # avg training error
-        testVar, testL2 = calcError(map(list, zip(*realDataCompilation)), map(list, zip(*testDataCompilation)), False)
-        lassoLog.write(str(round(testVar,3))+"\t")  # var explained over all test results
+	  #if itr > zeroRelease and numCoeffCS*param > coeffSum*500:
+          errorList = []
+          trainErrorList = []
+          testDataCompilation = []
+          realDataCompilation = []
+          for cross in range(10):
+            print "param", param, "cross", cross
+            Ctest = learnCS(trainA[cross], C, trainData[cross], [csFlag, param*0.1*coeffSum, maFlag, validating, itr > zeroRelease], fileLabel)
+            if Ctest != False:
+              validationData = matrixMultiply(Ctest, testA[cross])
+              var, l2 = calcError(testData[cross], validationData, False)
+              errorList.append(l2)
+              var, l2 = calcError(trainData[cross], matrixMultiply(Ctest, trainA[cross]), False)
+              trainErrorList.append(l2)
+              for row in map(list, zip(*validationData)):
+                testDataCompilation.append(row)
+              for row in map(list, zip(*testData[cross])):
+                realDataCompilation.append(row)
+            else:
+              lassoLog.write("could not learn with param "+str(param)+" on fold "+str(cross)+"\t")
+          if sum(errorList)/len(errorList) < bestError:
+            bestParam = param
+            bestError = sum(errorList)/len(errorList)
+          # log the results of testing this param
+          lassoLog.write(str(param)+"\t")   # param
+          # list of validation errors
+          lassoLog.write("{"+",".join([str(round(x)) for x in errorList])+"}\t")
+          lassoLog.write(str(round(sum(errorList)/len(errorList), 3))+"\t") # avg validation error
+          #list of training errors
+	  lassoLog.write("{"+",".join([str(round(x)) for x in trainErrorList])+"}\t")
+          lassoLog.write(str(round(sum(trainErrorList)/len(trainErrorList), 3))+"\t") # avg training error
+          testVar, testL2 = calcError(map(list, zip(*realDataCompilation)), map(list, zip(*testDataCompilation)), False)
+          lassoLog.write(str(round(testVar,3))+"\t")  # var explained over all test results
 
       lassoLog.write(str(bestParam)+"\t") #best param
       lassoLog.write(str(round(bestError, 3))+"\t") #best avg validation error
